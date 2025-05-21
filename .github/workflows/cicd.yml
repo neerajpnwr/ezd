@@ -1,0 +1,63 @@
+name: Whitelabel Agent Onboarding
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent_id:
+        description: 'Unique Agent ID or Slug (e.g., agent-1234)'
+        required: true
+      domain:
+        description: 'Agent custom domain (e.g., portal.agentdomain.com)'
+        required: true
+
+jobs:
+  deploy-agent-instance:
+    name: Deploy Agent to EKS
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: ap-south-1
+      CLUSTER_NAME: my-eks-cluster
+      AGENT_NAMESPACE: agent-${{ github.event.inputs.agent_id }}
+      AGENT_DOMAIN: ${{ github.event.inputs.domain }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+
+    - name: Set up Kubeconfig
+      run: |
+        aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
+
+    - name: Create Namespace for Agent
+      run: |
+        kubectl create namespace $AGENT_NAMESPACE || echo "Namespace already exists"
+
+    - name: Deploy Helm Chart
+      run: |
+        helm upgrade --install $AGENT_NAMESPACE ./helm/agent-portal \
+          --namespace $AGENT_NAMESPACE \
+          --set domain=$AGENT_DOMAIN \
+          --set agentId=${{ github.event.inputs.agent_id }}
+
+    - name: Annotate Ingress for Cert-Manager (if using)
+      run: |
+        kubectl annotate ingress agent-ingress \
+          --namespace $AGENT_NAMESPACE \
+          cert-manager.io/cluster-issuer=letsencrypt-prod \
+          --overwrite || echo "Ingress annotation skipped"
+
+    - name: Log Success
+      run: echo "✅ Agent ${{ github.event.inputs.agent_id }} deployed at $AGENT_DOMAIN"
